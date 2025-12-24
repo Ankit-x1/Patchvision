@@ -1,7 +1,10 @@
 import numpy as np
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
 import warnings
-
+import gc
+import threading
+from collections import defaultdict
+import time
 
 try:
     import torch
@@ -217,3 +220,242 @@ class TensorCoreEngine:
             scaler.scale(loss).backward()
             scaler.step(model.optimizer)
             scaler.update()
+
+
+class GPUMemoryManager:
+    """
+    Advanced GPU memory management with pooling and OOM handling
+    """
+    
+    def __init__(self, device_id: int = 0, max_pool_size: float = 0.8):
+        self.device_id = device_id
+        self.max_pool_size = max_pool_size
+        self.memory_pool = {}
+        self.allocated_tensors = defaultdict(list)
+        self.oom_count = 0
+        self.memory_stats = {
+            'allocations': 0,
+            'deallocations': 0,
+            'oom_recoveries': 0
+        }
+        
+        if HAS_TORCH and torch.cuda.is_available():
+            self.device = torch.device(f'cuda:{device_id}')
+            self.total_memory = torch.cuda.get_device_properties(device_id).total_memory
+            self.max_pool_bytes = int(self.total_memory * max_pool_size)
+        else:
+            self.device = None
+            self.total_memory = 0
+            self.max_pool_bytes = 0
+            
+        self._lock = threading.Lock()
+    
+    def allocate_tensor(self, shape: Tuple[int, ...], dtype: str = 'float32') -> torch.Tensor:
+        """Allocate tensor with memory pooling"""
+        if not HAS_TORCH or self.device is None:
+            return torch.zeros(shape, dtype=getattr(torch, dtype))
+        
+        key = (shape, dtype)
+        
+        with self._lock:
+            # Try to reuse from pool
+            if key in self.memory_pool and self.memory_pool[key]:
+                tensor = self.memory_pool[key].pop()
+                if tensor.shape == shape and tensor.dtype == getattr(torch, dtype):
+                    self.memory_stats['allocations'] += 1
+                    return tensor
+            
+            # Check available memory
+            if not self._check_memory_availability(shape, dtype):
+                self._handle_oom()
+                return self.allocate_tensor(shape, dtype)  # Retry after cleanup
+            
+            # Allocate new tensor
+            try:
+                tensor = torch.zeros(shape, dtype=getattr(torch, dtype), device=self.device)
+                self.allocated_tensors[key].append(tensor)
+                self.memory_stats['allocations'] += 1
+                return tensor
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    self.oom_count += 1
+                    self._handle_oom()
+                    return self.allocate_tensor(shape, dtype)  # Retry after cleanup
+                raise
+    
+    def deallocate_tensor(self, tensor: torch.Tensor):
+        """Deallocate tensor back to pool"""
+        if not HAS_TORCH or tensor.device.type != 'cuda':
+            return
+        
+        key = (tensor.shape, str(tensor.dtype).split('.')[-1])
+        
+        with self._lock:
+            if len(self.memory_pool.get(key, [])) < 10:  # Limit pool size per shape
+                if key not in self.memory_pool:
+                    self.memory_pool[key] = []
+                self.memory_pool[key].append(tensor)
+            else:
+                # Remove from allocated list if pool is full
+                if tensor in self.allocated_tensors[key]:
+                    self.allocated_tensors[key].remove(tensor)
+                del tensor
+            
+            self.memory_stats['deallocations'] += 1
+    
+    def _check_memory_availability(self, shape: Tuple[int, ...], dtype: str) -> bool:
+        """Check if enough memory is available"""
+        if not HAS_TORCH:
+            return True
+        
+        try:
+            required_bytes = np.prod(shape) * np.dtype(dtype).itemsize
+            current_memory = torch.cuda.memory_allocated(self.device_id)
+            available_memory = self.total_memory - current_memory
+            
+            return available_memory >= required_bytes and (current_memory + required_bytes) < self.max_pool_bytes
+        except:
+            return False
+    
+    def _handle_oom(self):
+        """Handle out of memory situation"""
+        self.memory_stats['oom_recoveries'] += 1
+        
+        # Clear memory pool
+        self.memory_pool.clear()
+        
+        # Force garbage collection
+        gc.collect()
+        
+        if HAS_TORCH:
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+            
+            # Clear unused tensors
+            for key, tensors in list(self.allocated_tensors.items()):
+                for tensor in tensors[:]:
+                    if tensor.numel() == 0 or not tensor.is_pinned():
+                        tensors.remove(tensor)
+                        del tensor
+    
+    def get_memory_info(self) -> Dict:
+        """Get current memory usage information"""
+        if not HAS_TORCH:
+            return {'error': 'PyTorch not available'}
+        
+        return {
+            'allocated': torch.cuda.memory_allocated(self.device_id),
+            'cached': torch.cuda.memory_reserved(self.device_id),
+            'max_allocated': torch.cuda.max_memory_allocated(self.device_id),
+            'total': self.total_memory,
+            'pool_size': len(self.memory_pool),
+            'stats': self.memory_stats.copy()
+        }
+    
+    def cleanup(self):
+        """Clean up all allocated memory"""
+        with self._lock:
+            self.memory_pool.clear()
+            
+            for tensors in self.allocated_tensors.values():
+                for tensor in tensors:
+                    del tensor
+            self.allocated_tensors.clear()
+            
+            if HAS_TORCH:
+                torch.cuda.empty_cache()
+
+
+class GPUMemoryPool:
+    """
+    Specialized memory pool for specific tensor shapes
+    """
+    
+    def __init__(self, max_size_per_shape: int = 20):
+        self.pools = defaultdict(list)
+        self.max_size_per_shape = max_size_per_shape
+        self._lock = threading.Lock()
+    
+    def get_tensor(self, shape: Tuple[int, ...], dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        """Get tensor from pool or allocate new one"""
+        key = (shape, dtype)
+        
+        with self._lock:
+            if self.pools[key]:
+                tensor = self.pools[key].pop()
+                tensor.zero_()
+                return tensor
+        
+        return torch.zeros(shape, dtype=dtype, device=device)
+    
+    def return_tensor(self, tensor: torch.Tensor):
+        """Return tensor to pool"""
+        if tensor.device.type != 'cuda':
+            return
+        
+        key = (tensor.shape, tensor.dtype)
+        
+        with self._lock:
+            if len(self.pools[key]) < self.max_size_per_shape:
+                self.pools[key].append(tensor)
+            else:
+                del tensor
+    
+    def clear(self):
+        """Clear all pools"""
+        with self._lock:
+            for tensors in self.pools.values():
+                for tensor in tensors:
+                    del tensor
+            self.pools.clear()
+
+
+class OOMHandler:
+    """
+    Out of memory error handler with recovery strategies
+    """
+    
+    def __init__(self, max_retries: int = 3):
+        self.max_retries = max_retries
+        self.recovery_strategies = [
+            self._clear_cache,
+            self._force_gc,
+            self._reduce_batch_size,
+            self._fallback_to_cpu
+        ]
+    
+    def handle_oom(self, func, *args, **kwargs):
+        """Handle OOM error with recovery strategies"""
+        last_exception = None
+        
+        for attempt in range(self.max_retries):
+            try:
+                return func(*args, **kwargs)
+            except RuntimeError as e:
+                if "out of memory" not in str(e).lower():
+                    raise
+                
+                last_exception = e
+                
+                if attempt < len(self.recovery_strategies):
+                    self.recovery_strategies[attempt]()
+                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+        
+        raise RuntimeError(f"Failed after {self.max_retries} OOM recovery attempts") from last_exception
+    
+    def _clear_cache(self):
+        """Clear CUDA cache"""
+        if HAS_TORCH:
+            torch.cuda.empty_cache()
+    
+    def _force_gc(self):
+        """Force garbage collection"""
+        gc.collect()
+    
+    def _reduce_batch_size(self):
+        """Reduce batch size (placeholder for actual implementation)"""
+        pass
+    
+    def _fallback_to_cpu(self):
+        """Fallback to CPU processing"""
+        pass
