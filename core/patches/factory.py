@@ -112,7 +112,19 @@ class PatchFactory:
     
     @staticmethod
     def _compute_entropy(patch: np.ndarray) -> float:
-        """Compute patch information entropy"""
-        hist = cv2.calcHist([patch], [0], None, [256], [0, 256])
-        hist = hist[hist > 0] / hist.sum()
-        return -np.sum(hist * np.log2(hist))
+        """Compute patch information entropy for both grayscale and color images"""
+        if len(patch.shape) == 3:
+            # Color image - compute entropy for each channel and average
+            entropies = []
+            for channel in range(patch.shape[2]):
+                hist = cv2.calcHist([patch], [channel], None, [256], [0, 256])
+                hist = hist[hist > 0] / hist.sum()
+                if hist.size > 0:
+                    entropy = -np.sum(hist * np.log2(hist))
+                    entropies.append(entropy)
+            return np.mean(entropies) if entropies else 0.0
+        else:
+            # Grayscale image
+            hist = cv2.calcHist([patch], [0], None, [256], [0, 256])
+            hist = hist[hist > 0] / hist.sum()
+            return -np.sum(hist * np.log2(hist)) if hist.size > 0 else 0.0
