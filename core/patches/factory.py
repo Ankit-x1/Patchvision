@@ -1,7 +1,14 @@
 import math
 from typing import Dict, List, Tuple, Optional, Union
 import numpy as np
-import cv2
+
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+    cv2 = None
+
 class PatchFactory:
     """
     Industrial-grade patch processor with adaptive strategies
@@ -72,7 +79,11 @@ class PatchFactory:
             # Downsample
             if scale > 1:
                 h, w = image.shape[:2]
-                resized = cv2.resize(image, (w//scale, h//scale))
+                if HAS_CV2:
+                    resized = cv2.resize(image, (w//scale, h//scale))
+                else:
+                    # Fallback using numpy
+                    resized = image[::scale, ::scale]
             else:
                 resized = image
                 
@@ -113,6 +124,27 @@ class PatchFactory:
     @staticmethod
     def _compute_entropy(patch: np.ndarray) -> float:
         """Compute patch information entropy for both grayscale and color images"""
+        if not HAS_CV2:
+            # Fallback entropy calculation without cv2
+            if len(patch.shape) == 3:
+                # Color image - compute entropy for each channel and average
+                entropies = []
+                for channel in range(patch.shape[2]):
+                    channel_data = patch[:, :, channel].flatten()
+                    hist, _ = np.histogram(channel_data, bins=256, range=(0, 256))
+                    hist = hist[hist > 0] / hist.sum()
+                    if hist.size > 0:
+                        entropy = -np.sum(hist * np.log2(hist))
+                        entropies.append(entropy)
+                return np.mean(entropies) if entropies else 0.0
+            else:
+                # Grayscale image
+                flat_patch = patch.flatten()
+                hist, _ = np.histogram(flat_patch, bins=256, range=(0, 256))
+                hist = hist[hist > 0] / hist.sum()
+                return -np.sum(hist * np.log2(hist)) if hist.size > 0 else 0.0
+        
+        # Use cv2 if available
         if len(patch.shape) == 3:
             # Color image - compute entropy for each channel and average
             entropies = []
