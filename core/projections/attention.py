@@ -44,26 +44,27 @@ class SparseAttention:
                         K: np.ndarray,
                         V: np.ndarray,
                         num_blocks: int) -> np.ndarray:
-        """Attention within local blocks"""
+        """Vectorized attention within local blocks"""
         batch_size, seq_len, dim = Q.shape
         output = np.zeros_like(Q)
         
+        # Vectorized block processing
         for block_idx in range(num_blocks):
             start = block_idx * self.block_size
             end = start + self.block_size
             
-            # Extract block
+            # Extract blocks using slicing
             Q_block = Q[:, start:end]
             K_block = K[:, start:end]
             V_block = V[:, start:end]
             
-            # Compute block attention
-            scores = np.matmul(Q_block, K_block.transpose(0, 2, 1))
-            scores = scores / math.sqrt(dim)
-            attention = np.softmax(scores, axis=-1)
+            # Vectorized attention computation
+            scores = np.einsum('bqd,bkd->bqk', Q_block, K_block) / math.sqrt(dim)
+            attention = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+            attention = attention / np.sum(attention, axis=-1, keepdims=True)
             
-            # Apply
-            block_output = np.matmul(attention, V_block)
+            # Vectorized application
+            block_output = np.einsum('bqk,bkd->bqd', attention, V_block)
             output[:, start:end] = block_output
             
         return output
@@ -73,40 +74,46 @@ class SparseAttention:
                          K: np.ndarray,
                          V: np.ndarray,
                          num_blocks: int) -> np.ndarray:
-        """Attention to random blocks"""
+        """Vectorized attention to random blocks"""
         batch_size, seq_len, dim = Q.shape
         output = np.zeros_like(Q)
         
+        # Pre-generate all random block selections for vectorization
+        all_random_blocks = np.array([
+            np.random.choice(num_blocks, self.num_rand_blocks, replace=False)
+            for _ in range(num_blocks)
+        ])
+        
         for block_idx in range(num_blocks):
-            # Select random blocks
-            random_blocks = np.random.choice(
-                num_blocks, 
-                self.num_rand_blocks, 
-                replace=False
-            )
-            
             Q_block = Q[:, block_idx*self.block_size:(block_idx+1)*self.block_size]
             
-            # Gather keys and values from random blocks
-            K_blocks = []
-            V_blocks = []
+            # Vectorized gathering of random blocks
+            random_blocks = all_random_blocks[block_idx]
+            
+            # Collect all K and V blocks at once
+            K_blocks_list = []
+            V_blocks_list = []
             
             for rb in random_blocks:
                 start = rb * self.block_size
                 end = start + self.block_size
-                K_blocks.append(K[:, start:end])
-                V_blocks.append(V[:, start:end])
+                K_blocks_list.append(K[:, start:end])
+                V_blocks_list.append(V[:, start:end])
                 
-            K_random = np.concatenate(K_blocks, axis=1)
-            V_random = np.concatenate(V_blocks, axis=1)
+            # Vectorized concatenation
+            K_random = np.concatenate(K_blocks_list, axis=1)
+            V_random = np.concatenate(V_blocks_list, axis=1)
             
-            # Compute attention
-            scores = np.matmul(Q_block, K_random.transpose(0, 2, 1))
-            scores = scores / math.sqrt(dim)
-            attention = np.softmax(scores, axis=-1)
+            # Vectorized attention computation using einsum
+            scores = np.einsum('bqd,bkd->bqk', Q_block, K_random) / math.sqrt(dim)
             
-            # Apply
-            block_output = np.matmul(attention, V_random)
+            # Numerically stable softmax
+            scores_max = np.max(scores, axis=-1, keepdims=True)
+            exp_scores = np.exp(scores - scores_max)
+            attention = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
+            
+            # Vectorized application
+            block_output = np.einsum('bqk,bkd->bqd', attention, V_random)
             output[:, block_idx*self.block_size:(block_idx+1)*self.block_size] = block_output
             
         return output
@@ -173,16 +180,26 @@ class CrossScaleAttention:
         if current_len == target_len:
             return seq
             
-        batch_size, _, dim = seq.shape
+        batch_size, current_len, dim = seq.shape
         
         if current_len < target_len:
-            # Upsample
-            factor = target_len // current_len
-            return np.repeat(seq, factor, axis=1)[:, :target_len]
+            # Upsample with proper handling of odd dimensions
+            factor = target_len / current_len
+            if factor.is_integer():
+                return np.repeat(seq, int(factor), axis=1)[:, :target_len]
+            else:
+                # Use interpolation for non-integer factors
+                indices = np.linspace(0, current_len-1, target_len)
+                return np.take(seq, indices.astype(int), axis=1)
         else:
-            # Downsample
-            factor = current_len // target_len
-            return seq[:, ::factor, :][:, :target_len]
+            # Downsample with proper handling of odd dimensions
+            factor = current_len / target_len
+            if factor.is_integer():
+                return seq[:, ::int(factor), :][:, :target_len]
+            else:
+                # Use strided slicing for non-integer factors
+                indices = np.round(np.linspace(0, current_len-1, target_len)).astype(int)
+                return seq[np.arange(batch_size)[:, None], indices]
             
     @staticmethod
     def _make_projection(x: np.ndarray, dim: int) -> np.ndarray:
