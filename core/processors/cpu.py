@@ -206,3 +206,41 @@ class VectorizedProcessor:
                 result[b, i] /= exp_sum
                 
         return result
+
+
+class CPUProcessor:
+    """
+    Main CPU processor class for OptimizedProcessor
+    """
+    
+    def __init__(self):
+        self.optimizer = CPUOptimizer()
+        self.vectorized = VectorizedProcessor()
+        self.backend = 'cpu'
+    
+    def optimized_matmul(self, A, B, use_fp16=False):
+        """Optimized matrix multiplication"""
+        if use_fp16:
+            A = A.astype(np.float16)
+            B = B.astype(np.float16)
+            result = self.optimizer.optimized_matmul(A, B)
+            return result.astype(np.float32)
+        return self.optimizer.optimized_matmul(A, B)
+    
+    def optimized_conv(self, input, weights, stride=1, padding=0, use_winograd=False):
+        """Optimized convolution"""
+        return self.optimizer.optimized_conv(input, weights, stride, padding)
+    
+    def optimized_attention(self, Q, K, V, use_flash=False):
+        """Optimized attention computation"""
+        # Use vectorized operations for attention
+        scores = np.matmul(Q, K.transpose(0, 2, 1))
+        scores = scores / np.sqrt(Q.shape[-1])
+        
+        # Use batched softmax for numerical stability
+        batch_size, seq_len, _ = scores.shape
+        scores_reshaped = scores.reshape(batch_size * seq_len, -1)
+        softmax_scores = self.vectorized.batched_softmax(scores_reshaped)
+        softmax_scores = softmax_scores.reshape(batch_size, seq_len, -1)
+        
+        return np.matmul(softmax_scores, V)
