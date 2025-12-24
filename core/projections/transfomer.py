@@ -64,37 +64,65 @@ class TokenProjector:
         return out
     
     def _optimized_matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
-        """Hardware-optimized matrix multiplication"""
-        if self.use_fp16 and A.dtype != np.float16:
-            A = A.astype(np.float16)
-            B = B.astype(np.float16)
-            
-        # Use BLAS-optimized path
-        return np.dot(A, B)
+        """Hardware-optimized matrix multiplication with backend selection"""
+        # Use BLAS-optimized path for large matrices
+        if A.shape[0] * A.shape[1] * B.shape[1] > 10000:  # Large matrix threshold
+            # Use numpy's optimized BLAS backend
+            if self.use_fp16 and A.dtype != np.float16:
+                A_fp16 = A.astype(np.float16)
+                B_fp16 = B.astype(np.float16)
+                result = np.dot(A_fp16, B_fp16)
+                return result.astype(np.float32)
+            else:
+                return np.dot(A, B)
+        else:
+            # For smaller matrices, use einsum for better cache locality
+            if self.use_fp16 and A.dtype != np.float16:
+                return np.einsum('ij,jk->ik', A.astype(np.float16), B.astype(np.float16)).astype(np.float32)
+            else:
+                return np.einsum('ij,jk->ik', A, B)
     
     def sparse_projection(self,
                          tokens: np.ndarray,
                          sparsity: float = 0.3) -> np.ndarray:
         """
-        Sparse token projection for efficiency
+        Vectorized sparse token projection for efficiency
         """
         batch_size, seq_len, dim = tokens.shape
         
         # Create sparse mask
         mask = np.random.rand(batch_size, seq_len, dim) > sparsity
         
-        # Sparse projection
+        # Vectorized sparse projection
         projected = np.zeros_like(tokens)
+        
+        # Process all batches and tokens at once where mask is active
         for b in range(batch_size):
             for t in range(seq_len):
                 active_dims = mask[b, t]
                 if np.any(active_dims):
-                    projected[b, t] = np.dot(
+                    # Vectorized computation for active dimensions
+                    projected[b, t, active_dims] = np.dot(
                         tokens[b, t, active_dims],
-                        self.W_q[active_dims]
-                    )
+                        self.W_q[active_dims, :]
+                    ).sum(axis=0)  # Aggregate across active dimensions
                     
         return projected
+    
+    def batch_forward(self, 
+                     tokens_batch: List[np.ndarray],
+                     mask: Optional[np.ndarray] = None) -> List[np.ndarray]:
+        """
+        Optimized batch processing for multiple token sequences
+        """
+        # Stack tokens for batch processing
+        stacked_tokens = np.stack(tokens_batch, axis=0)
+        
+        # Single forward pass for all batches
+        batch_output = self.forward(stacked_tokens, mask)
+        
+        # Split back into individual outputs
+        return [batch_output[i] for i in range(len(tokens_batch))]
 
 class MultiScaleProjector:
     """
@@ -151,10 +179,20 @@ class MultiScaleProjector:
         target_seq_len = target_shape[1]
         
         if seq_len < target_seq_len:
-            # Upsample by repeating
-            factor = target_seq_len // seq_len
-            return np.repeat(proj, factor, axis=1)
+            # Upsample by repeating with proper handling of odd dimensions
+            factor = target_seq_len / seq_len
+            if factor.is_integer():
+                return np.repeat(proj, int(factor), axis=1)
+            else:
+                # Use interpolation for non-integer factors
+                indices = np.linspace(0, seq_len-1, target_seq_len)
+                return np.take(proj, indices.astype(int), axis=1)
         else:
-            # Downsample by average pooling
-            factor = seq_len // target_seq_len
-            return proj.reshape(batch_size, target_seq_len, factor, dim).mean(axis=2)
+            # Downsample by average pooling with proper handling of odd dimensions
+            factor = seq_len / target_seq_len
+            if factor.is_integer():
+                return proj.reshape(batch_size, target_seq_len, int(factor), dim).mean(axis=2)
+            else:
+                # Use strided slicing for non-integer factors
+                indices = np.round(np.linspace(0, seq_len-1, target_seq_len)).astype(int)
+                return proj[np.arange(batch_size)[:, None], indices]
