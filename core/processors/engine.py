@@ -221,3 +221,181 @@ class OptimizedProcessor:
             return engine.optimized_attention(*args, **kwargs)
         else:
             raise ValueError(f"Unknown operation: {operation}")
+    
+    def _init_cuda(self):
+        """Initialize CUDA backend"""
+        from .gpu import GPUOptimizer
+        return GPUOptimizer(device_id=0)
+    
+    def _init_mps(self):
+        """Initialize MPS backend"""
+        from .cpu import CPUProcessor
+        processor = CPUProcessor()
+        processor.backend = 'mps'
+        return processor
+    
+    def _init_cpu(self):
+        """Initialize CPU backend"""
+        from .cpu import CPUProcessor
+        return CPUProcessor()
+
+
+class CudaEngine:
+    """CUDA-specific optimized operations"""
+    
+    def __init__(self):
+        from .gpu import GPUOptimizer
+        self.optimizer = GPUOptimizer()
+    
+    def optimized_matmul(self, A, B, use_fp16=True):
+        return self.optimizer.optimized_matmul(A, B, use_fp16)
+    
+    def optimized_conv(self, input, weights, stride=1, padding=0, use_winograd=True):
+        return self.optimizer.optimized_conv(input, weights, stride, padding, use_winograd)
+    
+    def optimized_attention(self, Q, K, V, use_flash=True):
+        return self.optimizer.optimized_attention(Q, K, V, use_flash)
+
+
+class MpsEngine:
+    """MPS-specific optimized operations"""
+    
+    def __init__(self):
+        try:
+            import torch
+            self.device = torch.device('mps')
+            self.has_torch = True
+        except ImportError:
+            self.has_torch = False
+    
+    def optimized_matmul(self, A, B, use_fp16=True):
+        if not self.has_torch:
+            return np.matmul(A, B)
+        
+        import torch
+        A_t = torch.from_numpy(A).to(self.device)
+        B_t = torch.from_numpy(B).to(self.device)
+        
+        if use_fp16:
+            A_t = A_t.half()
+            B_t = B_t.half()
+        
+        result = torch.matmul(A_t, B_t)
+        return result.cpu().numpy()
+    
+    def optimized_conv(self, input, weights, stride=1, padding=0, use_winograd=True):
+        if not self.has_torch:
+            from scipy.signal import convolve2d
+            return self._cpu_conv(input, weights, stride, padding)
+        
+        import torch
+        import torch.nn.functional as F
+        
+        input_t = torch.from_numpy(input).to(self.device)
+        weights_t = torch.from_numpy(weights).to(self.device)
+        
+        result = F.conv2d(input_t, weights_t, stride=stride, padding=padding)
+        return result.cpu().numpy()
+    
+    def optimized_attention(self, Q, K, V, use_flash=True):
+        if not self.has_torch:
+            return self._cpu_attention(Q, K, V)
+        
+        import torch
+        import torch.nn.functional as F
+        
+        Q_t = torch.from_numpy(Q).to(self.device)
+        K_t = torch.from_numpy(K).to(self.device)
+        V_t = torch.from_numpy(V).to(self.device)
+        
+        scores = torch.matmul(Q_t, K_t.transpose(-2, -1))
+        scores = scores / torch.sqrt(torch.tensor(Q_t.shape[-1], device=self.device))
+        attention = F.softmax(scores, dim=-1)
+        result = torch.matmul(attention, V_t)
+        
+        return result.cpu().numpy()
+    
+    @staticmethod
+    def _cpu_conv(input, weights, stride, padding):
+        """CPU fallback convolution"""
+        from scipy.signal import convolve2d
+        
+        batch, in_ch, h, w = input.shape
+        out_ch, _, kh, kw = weights.shape
+        
+        output = np.zeros((batch, out_ch, 
+                          (h - kh + 2*padding)//stride + 1,
+                          (w - kw + 2*padding)//stride + 1))
+        
+        for b in range(batch):
+            for oc in range(out_ch):
+                for ic in range(in_ch):
+                    output[b, oc] += convolve2d(
+                        input[b, ic],
+                        weights[oc, ic, ::-1, ::-1],
+                        mode='same' if padding > 0 else 'valid'
+                    )[::stride, ::stride]
+        return output
+    
+    @staticmethod
+    def _cpu_attention(Q, K, V):
+        """CPU fallback attention"""
+        scores = np.matmul(Q, K.transpose(0, 2, 1))
+        scores = scores / np.sqrt(Q.shape[-1])
+        attention = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+        attention = attention / np.sum(attention, axis=-1, keepdims=True)
+        return np.matmul(attention, V)
+
+
+class CpuEngine:
+    """CPU-optimized operations"""
+    
+    def __init__(self):
+        try:
+            from .cpu import CPUProcessor
+            self.processor = CPUProcessor()
+        except ImportError:
+            self.processor = None
+    
+    def optimized_matmul(self, A, B, use_fp16=False):
+        if use_fp16:
+            return np.matmul(A.astype(np.float16), B.astype(np.float16))
+        return np.matmul(A, B)
+    
+    def optimized_conv(self, input, weights, stride=1, padding=0, use_winograd=False):
+        from scipy.signal import convolve2d
+        return self._cpu_conv(input, weights, stride, padding)
+    
+    def optimized_attention(self, Q, K, V, use_flash=False):
+        return self._cpu_attention(Q, K, V)
+    
+    @staticmethod
+    def _cpu_conv(input, weights, stride, padding):
+        """CPU convolution implementation"""
+        from scipy.signal import convolve2d
+        
+        batch, in_ch, h, w = input.shape
+        out_ch, _, kh, kw = weights.shape
+        
+        output = np.zeros((batch, out_ch, 
+                          (h - kh + 2*padding)//stride + 1,
+                          (w - kw + 2*padding)//stride + 1))
+        
+        for b in range(batch):
+            for oc in range(out_ch):
+                for ic in range(in_ch):
+                    output[b, oc] += convolve2d(
+                        input[b, ic],
+                        weights[oc, ic, ::-1, ::-1],
+                        mode='same' if padding > 0 else 'valid'
+                    )[::stride, ::stride]
+        return output
+    
+    @staticmethod
+    def _cpu_attention(Q, K, V):
+        """CPU attention implementation"""
+        scores = np.matmul(Q, K.transpose(0, 2, 1))
+        scores = scores / np.sqrt(Q.shape[-1])
+        attention = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+        attention = attention / np.sum(attention, axis=-1, keepdims=True)
+        return np.matmul(attention, V)
