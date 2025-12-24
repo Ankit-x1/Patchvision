@@ -1,2 +1,2 @@
-from .transformer import TokenProjector, MultiScaleProjector
+from .transfomer import TokenProjector, MultiScaleProjector
 from .attention import SparseAttention, CrossScaleAttention
