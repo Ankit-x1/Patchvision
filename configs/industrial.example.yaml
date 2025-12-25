@@ -1,0 +1,25 @@
+core:
+  patches:
+    default_size: 16
+    default_stride: 8
+    strategies: ["adaptive", "hierarchical", "temporal"]
+    
+  projections:
+    token_dim: 512
+    num_heads: 8
+    attention_type: "sparse"
+    
+  processors:
+    default_backend: "auto"
+    use_quantization: true
+    batch_size: 32
+
+vision:
+  dashboard:
+    update_interval: 1000  # ms
+    port: 8050
+
+deploy:
+  api:
+    host: "0.0.0.0"
+    port: 8000

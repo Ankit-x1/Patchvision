@@ -1,0 +1,25 @@
+core:
+  patches:
+    default_size: 8  # Smaller patches for medical imaging precision
+    default_stride: 4
+    strategies: ["adaptive", "hierarchical"]
+    
+  projections:
+    token_dim: 1024  # Higher dimension for medical accuracy
+    num_heads: 16
+    attention_type: "full"
+    
+  processors:
+    default_backend: "auto"
+    use_quantization: false  # Disable for medical precision
+    batch_size: 16
+
+vision:
+  dashboard:
+    update_interval: 500  # ms - faster updates for medical monitoring
+    port: 8050
+
+deploy:
+  api:
+    host: "0.0.0.0"
+    port: 8000
