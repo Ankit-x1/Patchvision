@@ -151,17 +151,16 @@ def main():
         
         # Add data collection callback
         def collect_metrics():
-            # Mock metrics for demonstration
+            # Real metrics collection
             import psutil
-            import random
             
             return {
-                'cpu_usage': psutil.cpu_percent(),
+                'cpu_usage': psutil.cpu_percent(interval=0.1),
                 'memory_usage': psutil.virtual_memory().used / (1024 * 1024),  # MB
-                'inference_time': random.uniform(10, 50),
-                'fps': random.uniform(20, 30),
-                'detection_count': random.randint(1, 10),
-                'confidence_avg': random.uniform(0.7, 0.95)
+                'inference_time': 0.0,  # Will be updated by actual inference
+                'fps': 0.0,  # Will be updated by stream processing
+                'detection_count': 0,  # Will be updated by detection results
+                'confidence_avg': 0.0  # Will be updated by detection results
             }
         
         dashboard.add_data_callback(collect_metrics)
@@ -196,46 +195,74 @@ def main():
 
 
 def process_files(input_path, engine, config):
-    """Process files for inference with benchmarking"""
+    """Process files for inference with real PatchVision pipeline"""
     from core.analytics.benchmark import PerformanceBenchmark
+    from core.patches.factory import PatchFactory
+    from core.projections.transformer import TokenProjector
+    import cv2
 
     input_path = Path(input_path)
-
-    # Initialize benchmark
+    
+    # Initialize components
     benchmark = PerformanceBenchmark()
+    patch_factory = PatchFactory()
+    projector = TokenProjector(dim=config.get('core', {}).get('projections', {}).get('token_dim', 512))
 
     if input_path.is_file():
-        # Process single file
+        # Process single image file
         print(f"Processing file: {input_path}")
-
-# Benchmark file processing
+        
         def process_single_file():
-            # Simulate file processing
-            with open(input_path, 'rb') as f:
-                data = f.read(1024)  # Read first 1KB
-            time.sleep(0.01)  # Simulate processing time
-            return f"Processed {input_path}"
+            # Load image
+            if input_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']:
+                image = cv2.imread(str(input_path))
+                if image is None:
+                    return f"Failed to load image: {input_path}"
+                
+                # Extract patches
+                patches = patch_factory.adaptive_patching(image)
+                
+                # Convert to tokens
+                if len(patches) > 0:
+                    patch_array = np.array([p['data'] for p in patches])
+                    batch_size = 1
+                    num_patches = len(patches)
+                    patch_dim = patch_array[0].size
+                    patch_array = patch_array.reshape(batch_size, num_patches, patch_dim)
+                    tokens = projector.forward(patch_array)
+                    
+                    return f"Processed {input_path}: {len(patches)} patches, tokens shape {tokens.shape}"
+                else:
+                    return f"No patches extracted from {input_path}"
+            else:
+                return f"Skipped non-image file: {input_path}"
 
         result = benchmark.benchmark_function(process_single_file, "file_processing")
-        print(f"File processing: {result.avg_time:.4f}s ± {result.std_time:.4f}s")
+        print(f"Result: {result.result}")
+        print(f"Processing time: {result.avg_time:.4f}s ± {result.std_time:.4f}s")
 
     elif input_path.is_dir():
-        # Process directory
+        # Process directory of images
         print(f"Processing directory: {input_path}")
-        files = list(input_path.glob("*"))
-        print(f"Found {len(files)} files")
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+        image_files = [f for f in input_path.glob("*") if f.suffix.lower() in image_extensions]
+        print(f"Found {len(image_files)} image files")
 
-# Benchmark batch processing
         def process_directory():
-            # Simulate batch processing
-            for file_path in files[:10]:  # Process first 10 files
-                if file_path.is_file():
-                    with open(file_path, 'rb') as f:
-                        data = f.read(1024)
-                    time.sleep(0.001)  # Simulate processing
-            return f"Processed {min(len(files), 10)} files"
+            results = []
+            for file_path in image_files[:10]:  # Process first 10 images
+                image = cv2.imread(str(file_path))
+                if image is not None:
+                    patches = patch_factory.adaptive_patching(image)
+                    results.append({
+                        'file': file_path.name,
+                        'patches': len(patches),
+                        'size': image.shape
+                    })
+            return f"Processed {len(results)} images"
 
         result = benchmark.benchmark_function(process_directory, "batch_processing")
+        print(f"Result: {result.result}")
         print(f"Batch processing: {result.avg_time:.4f}s ± {result.std_time:.4f}s")
 
         # Save benchmark results
