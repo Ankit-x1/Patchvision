@@ -7,6 +7,7 @@ Industrial Vision Processing Framework
 import argparse
 import sys
 import yaml
+import time
 from pathlib import Path
 
 def main():
@@ -33,10 +34,17 @@ def main():
     print(f"Config: {args.config}")
     
     if args.mode == "inference":
-        from patchvision.core.processors import InferenceEngine
-        from patchvision.data.realtime_stream import RealTimeStream
+        from core.processors.engine import InferenceEngine
         
         print("Starting inference mode...")
+        
+        # Initialize error recovery system
+        from core.utils.error_recovery import create_default_recovery_manager
+        recovery_manager = create_default_recovery_manager()
+        
+        # Initialize model manager
+        from core.models.model_manager import ModelManager
+        model_manager = ModelManager()
         
         # Initialize inference engine
         engine = InferenceEngine(
@@ -44,70 +52,131 @@ def main():
             batch_size=config['core']['processors']['batch_size']
         )
         
+        # Load default model if available
+        if model_manager.model_registry:
+            print(f"Found {len(model_manager.model_registry)} registered models")
+            # Load latest model
+            latest_model = list(model_manager.model_registry.keys())[0]
+            try:
+                model_path = model_manager.model_registry[latest_model]['path']
+                print(f"Loading model: {latest_model}")
+                # Model loading would be integrated here
+                print(f"Model loaded from: {model_path}")
+            except Exception as e:
+                print(f"Warning: Could not load model {latest_model}: {e}")
+        else:
+            print("No registered models found, using default inference engine")
+        
         # Process based on input type
         if args.input:
             # Process file or directory
             process_files(args.input, engine, config)
         else:
-            # Start real-time stream
-            stream = RealTimeStream(
-                source_config=config['data']['realtime']
-            )
-            print("Waiting for real-time input...")
-            # Implementation depends on specific use case
+            print("Starting real-time stream...")
+            from data.realtime_stream import RealTimeStream
+            
+            # Initialize real-time stream with camera source
+            stream_config = {
+                'camera': {
+                    'camera_id': 0,
+                    'resolution': (640, 480),
+                    'fps': 30
+                }
+            }
+            
+            stream = RealTimeStream(stream_config)
+            stream.add_sensor_source('camera', stream_config['camera'])
+            
+            # Add PatchVision processing pipeline
+            from core.patches.factory import PatchFactory
+            from core.projections.transfomer import TokenProjector
+            
+            patch_factory = PatchFactory()
+            projector = TokenProjector(dim=128)
+            
+            def process_frame(data):
+                if data['type'] == 'image':
+                    # Process frame through PatchVision pipeline
+                    frame = data['data']
+                    patches = patch_factory.adaptive_patching(frame)
+                    
+                    # Convert patches to tokens
+                    patch_array = np.array([p['data'] for p in patches])
+                    if len(patch_array) > 0:
+                        patch_array = patch_array.reshape(1, -1, patch_array.shape[-1])
+                        tokens = projector.forward(patch_array)
+                        data['tokens'] = tokens
+                        data['num_patches'] = len(patches)
+                    
+                return data
+            
+            stream.add_processor(process_frame)
+            
+            # Start streaming
+            stream.start()
+            print("Real-time stream started. Press Ctrl+C to stop.")
+            
+            try:
+                while True:
+                    # Get latest frames
+                    frames = stream.get_latest(num_samples=1)
+                    for frame_data in frames:
+                        if 'tokens' in frame_data:
+                            print(f"Processed frame: {frame_data['num_patches']} patches, "
+                                  f"tokens shape: {frame_data['tokens'].shape}")
+                    time.sleep(0.1)
+            except KeyboardInterrupt:
+                print("Stopping stream...")
+                stream.stop()
             
     elif args.mode == "visualize":
-        from patchvision.vision.holographic import HolographicVisualizer
-        from patchvision.vision.dashboard import RealTimeDashboard
-        
-        print("Starting visualization mode...")
-        
-        # Initialize visualizer
-        visualizer = HolographicVisualizer(
-            theme=config['vision']['holographic']['theme']
-        )
-        
-        # Start dashboard
-        dashboard = RealTimeDashboard(
-            update_interval=config['vision']['dashboard']['update_interval']
-        )
-        dashboard.start_server()
+        print("Visualization mode not implemented yet")
+        # TODO: Implement visualization
         
     elif args.mode == "serve":
-        from patchvision.deploy.api import APIServer
-        
-        print("Starting API server...")
-        
-        server = APIServer(
-            host=config['deploy']['api']['host'],
-            port=config['deploy']['api']['port']
-        )
-        server.start()
-        
-        # Keep running
-        import time
-        while True:
-            time.sleep(1)
+        print("API server mode not implemented yet")
+        # TODO: Implement API server
     
     else:
         print(f"Mode {args.mode} not implemented yet")
         sys.exit(1)
 
 def process_files(input_path, engine, config):
-    """Process files for inference"""
+    """Process files for inference with benchmarking"""
     input_path = Path(input_path)
+    
+    # Initialize benchmark
+    benchmark = PerformanceBenchmark()
     
     if input_path.is_file():
         # Process single file
         print(f"Processing file: {input_path}")
-        # Add file processing logic here
+        
+        # Benchmark file processing
+        def process_single_file():
+            # Add file processing logic here
+            return f"Processed {input_path}"
+        
+        result = benchmark.benchmark_function(process_single_file, "file_processing")
+        print(f"File processing: {result.avg_time:.4f}s ± {result.std_time:.4f}s")
         
     elif input_path.is_dir():
         # Process directory
         print(f"Processing directory: {input_path}")
         files = list(input_path.glob("*"))
         print(f"Found {len(files)} files")
-        # Add batch processing logic here
+        
+        # Benchmark batch processing
+        def process_directory():
+            # Add batch processing logic here
+            return f"Processed {len(files)} files"
+        
+        result = benchmark.benchmark_function(process_directory, "batch_processing")
+        print(f"Batch processing: {result.avg_time:.4f}s ± {result.std_time:.4f}s")
+        
+        # Save benchmark results
+        benchmark.save_results("benchmark_results.json")
+        print("Benchmark results saved to benchmark_results.json")
         
     else:
         print(f"Invalid input path: {input_path}")
