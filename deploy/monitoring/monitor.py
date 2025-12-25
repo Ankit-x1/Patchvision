@@ -5,7 +5,14 @@ from typing import Dict, List, Optional, Callable
 from datetime import datetime, timedelta
 import threading
 import psutil
-import GPUtil
+
+try:
+    import GPUtil
+    HAS_GPUTIL = True
+except ImportError:
+    HAS_GPUTIL = False
+    GPUtil = None
+
 import socket
 
 class ProductionMonitor:
@@ -86,15 +93,16 @@ class ProductionMonitor:
         metrics["system"]["disk_percent"] = psutil.disk_usage("/").percent
         
         # GPU metrics if available
-        try:
-            gpus = GPUtil.getGPUs()
-            if gpus:
-                gpu = gpus[0]
-                metrics["system"]["gpu_load"] = gpu.load * 100
-                metrics["system"]["gpu_memory_percent"] = gpu.memoryUtil * 100
-                metrics["system"]["gpu_temperature"] = gpu.temperature
-        except:
-            pass
+        if HAS_GPUTIL:
+            try:
+                gpus = GPUtil.getGPUs()
+                if gpus:
+                    gpu = gpus[0]
+                    metrics["system"]["gpu_load"] = gpu.load * 100
+                    metrics["system"]["gpu_memory_percent"] = gpu.memoryUtil * 100
+                    metrics["system"]["gpu_temperature"] = gpu.temperature
+            except:
+                pass
         
         # Network metrics
         net_io = psutil.net_io_counters()
