@@ -89,7 +89,7 @@ def main():
             
             # Add PatchVision processing pipeline
             from core.patches.factory import PatchFactory
-            from core.projections.transfomer import TokenProjector
+            from core.projections.transformer import TokenProjector
             
             patch_factory = PatchFactory()
             projector = TokenProjector(dim=128)
