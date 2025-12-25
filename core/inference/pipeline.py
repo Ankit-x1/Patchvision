@@ -239,7 +239,7 @@ class InferencePipeline:
         
         outputs = self.model(batch, training=False)
         
-        if return_probabilities and not return_probabilities:
+        if return_probabilities:
             outputs = tf.nn.softmax(outputs)
         
         return outputs.numpy()
