@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patchvision"
+version = "1.0.0"
+description = "Industrial-Grade Vision Processing Framework"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Ankit Karki", email = "karkiankit101@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "Pillow>=10.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66.0",
+    "pandas>=2.0.0",
+    "py-cpuinfo>=9.0.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0.0", "torchvision>=0.15.0"]
+gpu = ["cupy-cuda11x>=12.0.0"]
+deploy = [
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "websockets>=12.0",
+    "onnxruntime>=1.16.0",
+]
+viz = [
+    "plotly>=5.17.0",
+    "dash>=2.14.0",
+    "dash-bootstrap-components>=1.4.2",
+    "kaleido>=0.2.0",
+]
+tuning = ["optuna>=3.0.0"]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+full = [
+    "patchvision[torch,gpu,deploy,viz,tuning,dev]"
+]
+
+[project.scripts]
+patchvision = "patchvision.main:main"
+
+[project.urls]
+Homepage = "https://github.com/Ankit-x1/Patchvision"
+Repository = "https://github.com/Ankit-x1/Patchvision"
+Issues = "https://github.com/Ankit-x1/Patchvision/issues"
