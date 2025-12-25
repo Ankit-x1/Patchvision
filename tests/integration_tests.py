@@ -15,7 +15,7 @@ import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.patches.factory import PatchFactory
-from core.projections.transfomer import TokenProjector
+from core.projections.transformer import TokenProjector
 from core.processors.engine import OptimizedProcessor
 from core.validation.input_validator import InputValidator, create_validation_pipeline
 from core.validation.integrity import DataIntegrityValidator, create_integrity_validator
