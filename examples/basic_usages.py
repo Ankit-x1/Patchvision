@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 def example_patch_processing():
     """Example of patch processing"""
     from core.patches.factory import PatchFactory
-    from core.projections.transfomer import TokenProjector
+    from core.projections.transformer import TokenProjector
     from core.processors.engine import InferenceEngine
     
     print("=== Example 1: Patch Processing ===")
