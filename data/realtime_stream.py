@@ -21,6 +21,7 @@ class RealTimeStream:
         self.running = False
         self.processors = []
         self.listeners = []
+        self.sources = []  # Initialize sources list
         
     def add_sensor_source(self, 
                          sensor_type: str,
