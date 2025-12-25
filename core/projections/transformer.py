@@ -60,9 +60,11 @@ class TokenProjector:
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
             
-        # Manual softmax implementation
-        exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
-        attention = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
+        # Manual softmax implementation with numerical stability
+        scores_max = np.max(scores, axis=-1, keepdims=True)
+        exp_scores = np.exp(scores - scores_max)
+        sum_exp = np.sum(exp_scores, axis=-1, keepdims=True)
+        attention = exp_scores / (sum_exp + 1e-8)  # Add small epsilon for numerical stability
         
         # Apply attention to values
         out = np.einsum('bhql,blhd->bqhd', attention, V)

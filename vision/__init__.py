@@ -1,12 +1,9 @@
-from .holographic import HolographicVisualizer, Interactive3D
-from .dashboard import RealTimeDashboard, PerformanceMonitor
-from .vr import VRInterface, ARVisualizer
+"""
+PatchVision Vision Module
+Visualization and dashboard components
+"""
 
-__all__ = [
-    'HolographicVisualizer',
-    'Interactive3D',
-    'RealTimeDashboard',
-    'PerformanceMonitor',
-    'VRInterface',
-    'ARVisualizer'
-]
+from .holographic import HolographicRenderer
+from .dashboard import DashboardManager
+
+__all__ = ["HolographicRenderer", "DashboardManager"]

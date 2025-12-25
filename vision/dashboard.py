@@ -1,278 +1,312 @@
-import dash
-from dash import dcc, html, Input, Output, State
-import dash_bootstrap_components as dbc
-import plotly.graph_objects as go
-from datetime import datetime
-import pandas as pd
-from typing import Dict, List, Optional
+"""
+Dashboard Manager for PatchVision
+Real-time monitoring and visualization dashboard
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from typing import Dict, List, Any, Optional, Callable
+import time
 import threading
-import queue
+from collections import deque
+import json
 
-class RealTimeDashboard:
-    """
-    Real-time monitoring dashboard for industrial vision
-    """
-    
-    def __init__(self, 
-                 title: str = "PatchVision Dashboard",
-                 update_interval: int = 1000):
-        self.title = title
-        self.update_interval = update_interval
-        self.data_queue = queue.Queue()
-        self.metrics = {}
-        
-        # Initialize Dash app
-        self.app = dash.Dash(
-            __name__,
-            external_stylesheets=[dbc.themes.DARKLY]
-        )
-        
-        self._setup_layout()
-        self._setup_callbacks()
-        
-    def _setup_layout(self):
-        """Setup dashboard layout"""
-        self.app.layout = dbc.Container([
-            # Header
-            dbc.Row([
-                dbc.Col([
-                    html.H1(self.title, 
-                           className="text-center mb-4",
-                           style={'color': '#00ff9d'})
-                ])
-            ]),
-            
-            # Main metrics row
-            dbc.Row([
-                dbc.Col(self._create_metric_card(
-                    "Throughput", "images/sec", "throughput"
-                ), width=3),
-                dbc.Col(self._create_metric_card(
-                    "Latency", "ms", "latency"
-                ), width=3),
-                dbc.Col(self._create_metric_card(
-                    "Accuracy", "%", "accuracy"
-                ), width=3),
-                dbc.Col(self._create_metric_card(
-                    "GPU Usage", "%", "gpu_usage"
-                ), width=3)
-            ], className="mb-4"),
-            
-            # Charts row
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(id='throughput-chart')
-                ], width=6),
-                dbc.Col([
-                    dcc.Graph(id='latency-chart')
-                ], width=6)
-            ], className="mb-4"),
-            
-            # 3D Visualization
-            dbc.Row([
-                dbc.Col([
-                    dcc.Graph(id='3d-visualization')
-                ], width=12)
-            ]),
-            
-            # Controls
-            dbc.Row([
-                dbc.Col([
-                    dbc.ButtonGroup([
-                        dbc.Button("Start", id="btn-start", color="success"),
-                        dbc.Button("Pause", id="btn-pause", color="warning"),
-                        dbc.Button("Reset", id="btn-reset", color="danger")
-                    ]),
-                    dcc.Interval(
-                        id='interval-update',
-                        interval=self.update_interval,
-                        n_intervals=0
-                    )
-                ], width=12, className="mt-4")
-            ])
-        ], fluid=True)
-    
-    def _create_metric_card(self, title: str, unit: str, id: str):
-        """Create metric card component"""
-        return dbc.Card([
-            dbc.CardBody([
-                html.H4(title, className="card-title"),
-                html.H2("--", id=f"{id}-value", className="card-text"),
-                html.P(unit, className="card-text text-muted")
-            ])
-        ])
-    
-    def _setup_callbacks(self):
-        """Setup dashboard callbacks"""
-        
-        @self.app.callback(
-            [Output('throughput-value', 'children'),
-             Output('latency-value', 'children'),
-             Output('accuracy-value', 'children'),
-             Output('gpu-usage-value', 'children')],
-            [Input('interval-update', 'n_intervals')]
-        )
-        def update_metrics(n):
-            """Update metric values"""
-            return [
-                f"{self.metrics.get('throughput', 0):.1f}",
-                f"{self.metrics.get('latency', 0):.1f}",
-                f"{self.metrics.get('accuracy', 0):.1f}",
-                f"{self.metrics.get('gpu_usage', 0):.1f}"
-            ]
-        
-        @self.app.callback(
-            Output('throughput-chart', 'figure'),
-            [Input('interval-update', 'n_intervals')]
-        )
-        def update_throughput_chart(n):
-            """Update throughput chart"""
-            fig = go.Figure()
-            
-            # Add real-time data
-            if 'throughput_history' in self.metrics:
-                fig.add_trace(go.Scatter(
-                    y=self.metrics['throughput_history'],
-                    mode='lines',
-                    name='Throughput',
-                    line=dict(color='#00ff9d', width=2)
-                ))
-                
-            fig.update_layout(
-                title="Throughput Over Time",
-                template="plotly_dark",
-                xaxis_title="Time",
-                yaxis_title="Images/sec"
-            )
-            
-            return fig
-        
-        @self.app.callback(
-            Output('3d-visualization', 'figure'),
-            [Input('interval-update', 'n_intervals')]
-        )
-        def update_3d_visualization(n):
-            """Update 3D visualization"""
-            fig = go.Figure()
-            
-            # Sample 3D data
-            if 'point_cloud' in self.metrics:
-                points = self.metrics['point_cloud']
-                fig.add_trace(go.Scatter3d(
-                    x=points[:, 0],
-                    y=points[:, 1],
-                    z=points[:, 2],
-                    mode='markers',
-                    marker=dict(size=2, color='#0088ff')
-                ))
-                
-            fig.update_layout(
-                title="Feature Point Cloud",
-                template="plotly_dark",
-                scene=dict(
-                    xaxis_title="X",
-                    yaxis_title="Y",
-                    zaxis_title="Z"
-                )
-            )
-            
-            return fig
-    
-    def update_data(self, data: Dict):
-        """Update dashboard data"""
-        self.data_queue.put(data)
-        
-    def start_server(self, host: str = "0.0.0.0", port: int = 8050):
-        """Start dashboard server"""
-        threading.Thread(
-            target=self.app.run_server,
-            kwargs={'host': host, 'port': port, 'debug': False},
-            daemon=True
-        ).start()
-        print(f"Dashboard running at http://{host}:{port}")
 
-class PerformanceMonitor:
-    """
-    Performance monitoring and alerting
-    """
-    
-    def __init__(self, thresholds: Optional[Dict] = None):
-        self.thresholds = thresholds or {
-            'latency': 100,  # ms
-            'throughput': 30,  # images/sec
-            'accuracy': 0.95,  # 95%
-            'memory': 0.9  # 90%
+class DashboardManager:
+    """Real-time dashboard for monitoring PatchVision operations"""
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.dashboard_config = config.get("vision", {}).get("dashboard", {})
+        self.update_interval = (
+            self.dashboard_config.get("update_interval", 1000) / 1000.0
+        )
+        self.port = self.dashboard_config.get("port", 8050)
+
+        # Data storage for real-time plotting
+        self.max_points = 100
+        self.metrics_history = {
+            "inference_time": deque(maxlen=self.max_points),
+            "fps": deque(maxlen=self.max_points),
+            "memory_usage": deque(maxlen=self.max_points),
+            "cpu_usage": deque(maxlen=self.max_points),
+            "detection_count": deque(maxlen=self.max_points),
+            "confidence_avg": deque(maxlen=self.max_points),
         }
-        
-        self.alerts = []
-        self.history = []
-        
-    def monitor(self, metrics: Dict):
+
+        # Plots
+        self.fig = None
+        self.axes = {}
+        self.lines = {}
+        self.animation = None
+        self.is_running = False
+
+        # Callbacks
+        self.data_callbacks = []
+
+    def initialize_dashboard(self):
+        """Initialize the dashboard layout"""
+        plt.style.use("dark_background")
+        self.fig = plt.figure(figsize=(16, 10))
+        self.fig.patch.set_facecolor("#0a0a0a")
+
+        # Create subplots
+        gs = self.fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
+
+        # Performance metrics
+        self.axes["inference_time"] = self.fig.add_subplot(gs[0, 0])
+        self.axes["fps"] = self.fig.add_subplot(gs[0, 1])
+        self.axes["memory"] = self.fig.add_subplot(gs[0, 2])
+
+        # Detection metrics
+        self.axes["detections"] = self.fig.add_subplot(gs[1, 0])
+        self.axes["confidence"] = self.fig.add_subplot(gs[1, 1])
+        self.axes["accuracy"] = self.fig.add_subplot(gs[1, 2])
+
+        # System info and status
+        self.axes["system"] = self.fig.add_subplot(gs[2, :2])
+        self.axes["status"] = self.fig.add_subplot(gs[2, 2])
+
+        # Initialize lines for each plot
+        for metric in self.metrics_history:
+            if metric in self.axes:
+                (line,) = self.axes[metric].plot([], [], "g-", linewidth=2)
+                self.lines[metric] = line
+                self._setup_metric_plot(metric)
+
+        # Setup static plots
+        self._setup_system_info()
+        self._setup_status_panel()
+
+        self.fig.suptitle("PatchVision Dashboard", fontsize=20, color="white", y=0.98)
+
+    def _setup_metric_plot(self, metric: str):
+        """Setup individual metric plot"""
+        ax = self.axes[metric]
+        ax.set_facecolor("#1a1a1a")
+        ax.set_title(metric.replace("_", " ").title(), color="white", fontsize=12)
+        ax.grid(True, alpha=0.3)
+
+        # Set labels and limits
+        if metric == "inference_time":
+            ax.set_ylabel("Time (ms)", color="white")
+            ax.set_ylim(0, 200)
+        elif metric == "fps":
+            ax.set_ylabel("FPS", color="white")
+            ax.set_ylim(0, 60)
+        elif metric == "memory_usage":
+            ax.set_ylabel("Memory (MB)", color="white")
+            ax.set_ylim(0, 8000)
+        elif metric == "detection_count":
+            ax.set_ylabel("Count", color="white")
+            ax.set_ylim(0, 100)
+        elif metric == "confidence_avg":
+            ax.set_ylabel("Confidence", color="white")
+            ax.set_ylim(0, 1)
+
+        ax.set_xlabel("Time", color="white")
+        ax.tick_params(colors="white")
+
+    def _setup_system_info(self):
+        """Setup system information panel"""
+        ax = self.axes["system"]
+        ax.set_facecolor("#1a1a1a")
+        ax.set_title("System Information", color="white", fontsize=12)
+        ax.axis("off")
+
+        # Display system info text
+        info_text = """
+        CPU: {cpu_info}
+        GPU: {gpu_info}
+        Memory: {memory_info}
+        Device: {device}
+        Model: {model}
+        Config: {config}
+        """.format(
+            cpu_info="Intel i7-9700K",
+            gpu_info="NVIDIA RTX 3080",
+            memory_info="32GB DDR4",
+            device="CUDA",
+            model="PatchVision-v1.0",
+            config="Industrial",
+        )
+
+        ax.text(
+            0.05,
+            0.95,
+            info_text,
+            transform=ax.transAxes,
+            color="white",
+            fontsize=10,
+            verticalalignment="top",
+            fontfamily="monospace",
+        )
+
+    def _setup_status_panel(self):
+        """Setup status panel"""
+        ax = self.axes["status"]
+        ax.set_facecolor("#1a1a1a")
+        ax.set_title("System Status", color="white", fontsize=12)
+        ax.axis("off")
+
+        status_text = """
+        ● Status: RUNNING
+        ● Uptime: 00:00:00
+        ● Frames Processed: 0
+        ● Errors: 0
+        ● Warnings: 0
         """
-        Monitor metrics and generate alerts
-        """
-        self.history.append({
-            'timestamp': datetime.now(),
-            **metrics
-        })
-        
-        # Check thresholds
+
+        self.status_text_obj = ax.text(
+            0.05,
+            0.95,
+            status_text,
+            transform=ax.transAxes,
+            color="#00ff41",
+            fontsize=10,
+            verticalalignment="top",
+            fontfamily="monospace",
+        )
+
+    def update_metrics(self, metrics: Dict[str, float]):
+        """Update metrics with new values"""
+        timestamp = time.time()
+
         for metric, value in metrics.items():
-            if metric in self.thresholds:
-                threshold = self.thresholds[metric]
-                
-                if metric == 'accuracy' and value < threshold:
-                    self._add_alert(f"Low accuracy: {value:.2f} < {threshold}")
-                elif metric == 'latency' and value > threshold:
-                    self._add_alert(f"High latency: {value:.1f}ms > {threshold}ms")
-                elif metric == 'throughput' and value < threshold:
-                    self._add_alert(f"Low throughput: {value:.1f} < {threshold}")
-                elif metric == 'memory' and value > threshold:
-                    self._add_alert(f"High memory usage: {value:.1%} > {threshold:.0%}")
-    
-    def get_performance_report(self) -> Dict:
-        """Generate performance report"""
-        if not self.history:
-            return {}
-            
-        df = pd.DataFrame(self.history)
-        
-        return {
-            'summary': {
-                'avg_latency': df['latency'].mean(),
-                'avg_throughput': df['throughput'].mean(),
-                'avg_accuracy': df['accuracy'].mean(),
-                'total_alerts': len(self.alerts)
-            },
-            'trends': {
-                'latency_trend': self._compute_trend(df['latency']),
-                'throughput_trend': self._compute_trend(df['throughput'])
-            },
-            'alerts': self.alerts[-10:]  # Last 10 alerts
-        }
-    
-    def _add_alert(self, message: str):
-        """Add alert to history"""
-        alert = {
-            'timestamp': datetime.now(),
-            'message': message,
-            'severity': 'warning'
-        }
-        self.alerts.append(alert)
-        print(f"ALERT: {message}")
-    
-    @staticmethod
-    def _compute_trend(series: pd.Series) -> str:
-        """Compute trend direction"""
-        if len(series) < 2:
-            return "stable"
-            
-        recent = series.iloc[-5:].mean() if len(series) >= 5 else series.iloc[-1]
-        older = series.iloc[-10:-5].mean() if len(series) >= 10 else series.iloc[0]
-        
-        if recent > older * 1.1:
-            return "increasing"
-        elif recent < older * 0.9:
-            return "decreasing"
+            if metric in self.metrics_history:
+                self.metrics_history[metric].append((timestamp, value))
+
+    def add_data_callback(self, callback: Callable[[], Dict[str, float]]):
+        """Add callback for real-time data collection"""
+        self.data_callbacks.append(callback)
+
+    def _collect_data(self):
+        """Collect data from all callbacks"""
+        for callback in self.data_callbacks:
+            try:
+                data = callback()
+                self.update_metrics(data)
+            except Exception as e:
+                print(f"Dashboard callback error: {e}")
+
+    def _update_plot(self, frame):
+        """Update plot animation"""
+        if not self.is_running:
+            return []
+
+        # Collect new data
+        self._collect_data()
+
+        updated_lines = []
+
+        # Update each metric plot
+        for metric in self.metrics_history:
+            if metric in self.lines and len(self.metrics_history[metric]) > 0:
+                data = list(self.metrics_history[metric])
+                if data:
+                    times, values = zip(*data)
+                    # Normalize times to start from 0
+                    if len(times) > 1:
+                        times = [(t - times[0]) for t in times]
+
+                    self.lines[metric].set_data(times, values)
+
+                    # Update x-axis limits
+                    ax = self.axes[metric]
+                    if len(times) > 1:
+                        ax.set_xlim(0, max(times))
+                        ax.relim()
+                        ax.autoscale_view(scalex=False, scaley=True)
+
+                updated_lines.append(self.lines[metric])
+
+        # Update status panel
+        self._update_status()
+
+        return updated_lines
+
+    def _update_status(self):
+        """Update status panel"""
+        # Calculate uptime
+        if hasattr(self, "start_time"):
+            uptime = time.time() - self.start_time
+            hours = int(uptime // 3600)
+            minutes = int((uptime % 3600) // 60)
+            seconds = int(uptime % 60)
+            uptime_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         else:
-            return "stable"
+            uptime_str = "00:00:00"
+
+        # Count processed frames
+        total_frames = len(self.metrics_history.get("inference_time", []))
+
+        status_text = f"""
+        ● Status: {"RUNNING" if self.is_running else "STOPPED"}
+        ● Uptime: {uptime_str}
+        ● Frames Processed: {total_frames}
+        ● Errors: 0
+        ● Warnings: 0
+        """
+
+        if hasattr(self, "status_text_obj"):
+            self.status_text_obj.set_text(status_text)
+
+    def start(self):
+        """Start the dashboard"""
+        if self.fig is None:
+            self.initialize_dashboard()
+
+        self.is_running = True
+        self.start_time = time.time()
+
+        # Start animation
+        self.animation = animation.FuncAnimation(
+            self.fig,
+            self._update_plot,
+            interval=int(self.update_interval * 1000),
+            blit=True,
+            cache_frame_data=False,
+        )
+
+        plt.show(block=False)
+        print(f"Dashboard started on port {self.port}")
+
+    def stop(self):
+        """Stop the dashboard"""
+        self.is_running = False
+        if self.animation is not None:
+            self.animation.event_source.stop()
+        print("Dashboard stopped")
+
+    def save_dashboard_state(self, filename: str):
+        """Save current dashboard state to file"""
+        state = {
+            "timestamp": time.time(),
+            "metrics_history": {k: list(v) for k, v in self.metrics_history.items()},
+            "is_running": self.is_running,
+        }
+
+        with open(filename, "w") as f:
+            json.dump(state, f, indent=2)
+
+    def load_dashboard_state(self, filename: str):
+        """Load dashboard state from file"""
+        try:
+            with open(filename, "r") as f:
+                state = json.load(f)
+
+            for metric, data in state.get("metrics_history", {}).items():
+                if metric in self.metrics_history:
+                    self.metrics_history[metric].clear()
+                    self.metrics_history[metric].extend(data)
+
+        except Exception as e:
+            print(f"Error loading dashboard state: {e}")
+
+    def close(self):
+        """Close the dashboard"""
+        self.stop()
+        if self.fig is not None:
+            plt.close(self.fig)
+            self.fig = None
