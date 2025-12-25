@@ -211,7 +211,7 @@ class OptimizedProcessor:
         """
         Process operation with optimal backend
         """
-        engine = self.engines.get(self.backend, self._init_cpu)()
+        engine = self.engines[self.backend]()
         
         if operation == 'matmul':
             return engine.optimized_matmul(*args, **kwargs)
