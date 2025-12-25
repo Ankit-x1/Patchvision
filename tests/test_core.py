@@ -43,14 +43,14 @@ class TestInferenceEngine(unittest.TestCase):
         self.engine = InferenceEngine(batch_size=4)
     
     def test_process(self):
-        test_data = [np.random.randn(3, 224, 224) for _ in range(10)]
+        test_data = np.random.randn(10, 3, 224, 224).astype(np.float32)
         
         # Mock model
         def mock_model(x):
             return x * 2
         
         result = self.engine.process(test_data, mock_model)
-        self.assertEqual(len(result), len(test_data))
+        self.assertEqual(len(result), test_data.shape[0])
 
 if __name__ == '__main__':
     unittest.main()

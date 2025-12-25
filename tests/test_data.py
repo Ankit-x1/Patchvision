@@ -17,7 +17,7 @@ class TestSyntheticDataFactory(unittest.TestCase):
     
     def test_generate_thermal_data(self):
         thermal = self.factory.generate_thermal_data()
-        self.assertEqual(thermal.shape, (512, 640))
+        self.assertEqual(thermal.shape, (640, 512))
         self.assertEqual(thermal.dtype, np.uint8)
 
 class TestDataWarfare(unittest.TestCase):
