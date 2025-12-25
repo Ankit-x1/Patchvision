@@ -132,9 +132,9 @@ class PatchFactory:
                 for channel in range(patch.shape[2]):
                     channel_data = patch[:, :, channel].flatten()
                     hist, _ = np.histogram(channel_data, bins=256, range=(0, 256))
-                    hist = hist[hist > 0] / hist.sum()
+                    hist = hist[hist > 0] / (hist.sum() + 1e-8)  # Add epsilon for numerical stability
                     if hist.size > 0:
-                        entropy = -np.sum(hist * np.log2(hist))
+                        entropy = -np.sum(hist * np.log2(hist + 1e-8))  # Add epsilon to avoid log(0)
                         entropies.append(entropy)
                 return np.mean(entropies) if entropies else 0.0
             else:
