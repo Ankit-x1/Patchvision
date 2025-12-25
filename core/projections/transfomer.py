@@ -35,10 +35,18 @@ class TokenProjector:
         """
         Project tokens with hardware optimization
         """
-        # Linear projections
-        Q = self._optimized_matmul(tokens, self.W_q)
-        K = self._optimized_matmul(tokens, self.W_k)
-        V = self._optimized_matmul(tokens, self.W_v)
+        # Linear projections - ensure proper matrix multiplication
+        batch_size, seq_len, token_dim = tokens.shape
+        if token_dim != self.dim:
+            # Project tokens to correct dimension first
+            tokens_proj = np.einsum('bsd,dk->bsk', tokens, 
+                                np.random.randn(token_dim, self.dim) * np.sqrt(2.0/(token_dim + self.dim)))
+        else:
+            tokens_proj = tokens
+            
+        Q = self._optimized_matmul(tokens_proj, self.W_q)
+        K = self._optimized_matmul(tokens_proj, self.W_k)
+        V = self._optimized_matmul(tokens_proj, self.W_v)
         
         # Split into heads
         batch_size, seq_len, _ = tokens.shape
@@ -52,7 +60,9 @@ class TokenProjector:
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
             
-        attention = np.softmax(scores, axis=-1)
+        # Manual softmax implementation
+        exp_scores = np.exp(scores - np.max(scores, axis=-1, keepdims=True))
+        attention = exp_scores / np.sum(exp_scores, axis=-1, keepdims=True)
         
         # Apply attention to values
         out = np.einsum('bhql,blhd->bqhd', attention, V)
@@ -69,18 +79,16 @@ class TokenProjector:
         if A.shape[0] * A.shape[1] * B.shape[1] > 10000:  # Large matrix threshold
             # Use numpy's optimized BLAS backend
             if self.use_fp16 and A.dtype != np.float16:
-                A_fp16 = A.astype(np.float16)
-                B_fp16 = B.astype(np.float16)
-                result = np.dot(A_fp16, B_fp16)
+                result = np.matmul(A.astype(np.float16), B.astype(np.float16))
                 return result.astype(np.float32)
             else:
-                return np.dot(A, B)
+                return np.matmul(A, B)
         else:
             # For smaller matrices, use einsum for better cache locality
             if self.use_fp16 and A.dtype != np.float16:
-                return np.einsum('ij,jk->ik', A.astype(np.float16), B.astype(np.float16)).astype(np.float32)
+                return np.matmul(A.astype(np.float16), B.astype(np.float16)).astype(np.float32)
             else:
-                return np.einsum('ij,jk->ik', A, B)
+                return np.matmul(A, B)
     
     def sparse_projection(self,
                          tokens: np.ndarray,
