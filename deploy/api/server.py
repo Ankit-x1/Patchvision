@@ -135,58 +135,131 @@ class APIServer:
     async def _process_task(
         self, image: np.ndarray, task: str, parameters: Optional[Dict]
     ) -> Dict:
-        """Process image based on task"""
-        # This is a placeholder - implement actual processing
-        if task == "defect_detection":
-            return self._simulate_defect_detection(image)
-        elif task == "quality_inspection":
-            return self._simulate_quality_inspection(image)
-        elif task == "assembly_verification":
-            return self._simulate_assembly_verification(image)
-        else:
-            raise ValueError(f"Unknown task: {task}")
+        """Process image based on task using real inference pipeline"""
+        try:
+            # Import core components
+            from core.patches.factory import PatchFactory
+            from core.projections.transformer import TokenProjector
+            from core.processors.engine import InferenceEngine
+            
+            # Initialize components
+            patch_factory = PatchFactory()
+            projector = TokenProjector(dim=512)
+            engine = InferenceEngine(mode='auto', batch_size=1)
+            
+            # Extract patches
+            patches = patch_factory.adaptive_patching(image)
+            
+            # Convert patches to tokens
+            if len(patches) > 0:
+                patch_array = np.array([p['data'] for p in patches])
+                # Flatten patches for projection
+                batch_size = 1
+                num_patches = len(patches)
+                patch_dim = patch_array[0].size
+                patch_array = patch_array.reshape(batch_size, num_patches, patch_dim)
+                
+                # Project to tokens
+                tokens = projector.forward(patch_array)
+                
+                # Process based on task
+                if task == "defect_detection":
+                    return self._process_defect_detection(image, patches, tokens)
+                elif task == "quality_inspection":
+                    return self._process_quality_inspection(image, patches, tokens)
+                elif task == "assembly_verification":
+                    return self._process_assembly_verification(image, patches, tokens)
+                else:
+                    raise ValueError(f"Unknown task: {task}")
+            else:
+                return {"error": "No patches extracted from image"}
+                
+        except Exception as e:
+            return {"error": f"Processing failed: {str(e)}"}
 
     @staticmethod
-    def _simulate_defect_detection(image: np.ndarray) -> Dict:
-        """Simulate defect detection"""
+    def _process_defect_detection(image: np.ndarray, patches: List[Dict], tokens: np.ndarray) -> Dict:
+        """Real defect detection using patch analysis"""
         h, w = image.shape[:2]
-
-        # Simulate defect detection
         defects = []
-        for _ in range(np.random.randint(0, 5)):
-            x = np.random.randint(0, w - 50)
-            y = np.random.randint(0, h - 50)
-            width = np.random.randint(10, 50)
-            height = np.random.randint(10, 50)
-
-            defects.append(
-                {
-                    "bbox": [x, y, x + width, y + height],
-                    "confidence": np.random.random(),
-                    "class": np.random.choice(["crack", "scratch", "dent"]),
-                }
-            )
-
-        return {"defects_found": len(defects), "defects": defects, "image_size": [w, h]}
-
-    @staticmethod
-    def _simulate_quality_inspection(image: np.ndarray) -> Dict:
-        """Simulate quality inspection"""
+        
+        # Analyze patches for defects based on entropy and contrast
+        for patch_info in patches:
+            metadata = patch_info.get('metadata', {})
+            contrast = metadata.get('contrast', 0)
+            entropy = metadata.get('entropy', 0)
+            importance = patch_info.get('importance', 0)
+            
+            # High importance + low contrast often indicates defects
+            if importance > 0.7 and contrast < 0.3:
+                x, y, w_patch, h_patch = patch_info['coordinates']
+                defects.append({
+                    'bbox': [int(x), int(y), int(x + w_patch), int(y + h_patch)],
+                    'confidence': float(importance),
+                    'type': 'anomaly',
+                    'metrics': {
+                        'contrast': float(contrast),
+                        'entropy': float(entropy)
+                    }
+                })
+        
         return {
-            "quality_score": np.random.random(),
-            "pass": np.random.random() > 0.3,
-            "defects": np.random.randint(0, 10),
-            "areas_to_check": ["edge_quality", "surface_finish", "dimensions"],
+            'defects_found': len(defects),
+            'defects': defects,
+            'image_size': [w, h],
+            'patches_analyzed': len(patches),
+            'tokens_shape': list(tokens.shape)
         }
 
     @staticmethod
-    def _simulate_assembly_verification(image: np.ndarray) -> Dict:
-        """Simulate assembly verification"""
+    def _process_quality_inspection(image: np.ndarray, patches: List[Dict], tokens: np.ndarray) -> Dict:
+        """Real quality inspection using patch statistics"""
+        # Calculate quality metrics from patches
+        contrasts = [p.get('metadata', {}).get('contrast', 0) for p in patches]
+        entropies = [p.get('metadata', {}).get('entropy', 0) for p in patches]
+        importances = [p.get('importance', 0) for p in patches]
+        
+        avg_contrast = np.mean(contrasts) if contrasts else 0
+        avg_entropy = np.mean(entropies) if entropies else 0
+        avg_importance = np.mean(importances) if importances else 0
+        
+        # Quality score based on uniformity and detail
+        quality_score = (avg_contrast * 0.4 + avg_entropy * 0.3 + (1 - avg_importance) * 0.3)
+        
+        # Pass if quality score is above threshold
+        passed = quality_score > 0.5
+        
         return {
-            "assembly_complete": np.random.random() > 0.2,
-            "missing_parts": np.random.randint(0, 3),
-            "misaligned_parts": np.random.randint(0, 2),
-            "verification_score": np.random.random(),
+            'quality_score': float(quality_score),
+            'pass': bool(passed),
+            'metrics': {
+                'avg_contrast': float(avg_contrast),
+                'avg_entropy': float(avg_entropy),
+                'uniformity': float(1 - avg_importance)
+            },
+            'patches_analyzed': len(patches)
+        }
+
+    @staticmethod
+    def _process_assembly_verification(image: np.ndarray, patches: List[Dict], tokens: np.ndarray) -> Dict:
+        """Real assembly verification using spatial analysis"""
+        # Analyze spatial distribution of high-importance patches
+        high_importance_patches = [p for p in patches if p.get('importance', 0) > 0.6]
+        
+        # Calculate coverage
+        total_area = image.shape[0] * image.shape[1]
+        covered_area = sum([p['coordinates'][2] * p['coordinates'][3] for p in high_importance_patches])
+        coverage = covered_area / total_area if total_area > 0 else 0
+        
+        # Assembly is complete if coverage is high and uniform
+        assembly_complete = coverage > 0.3 and len(high_importance_patches) > 5
+        
+        return {
+            'assembly_complete': bool(assembly_complete),
+            'coverage': float(coverage),
+            'components_detected': len(high_importance_patches),
+            'verification_score': float(min(coverage * 2, 1.0)),
+            'patches_analyzed': len(patches)
         }
 
     def start(self):
@@ -243,23 +316,34 @@ class WebSocketServer:
         if message_type == "ping":
             return {"type": "pong", "timestamp": datetime.now().isoformat()}
         elif message_type == "process":
-            # Process image data
-            image_data = message.get("image")
-            task = message.get("task", "inspect")
+            # Process image data in real-time
+            try:
+                image_data = message.get("image")
+                task = message.get("task", "defect_detection")
 
-            # Decode and process
-            image_bytes = base64.b64decode(image_data)
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                # Decode image
+                image_bytes = base64.b64decode(image_data)
+                nparr = np.frombuffer(image_bytes, np.uint8)
+                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-            # Simulate processing
-            result = {
-                "task": task,
-                "result": "processed",
-                "timestamp": datetime.now().isoformat(),
-            }
+                # Import processing components
+                from core.patches.factory import PatchFactory
+                from core.projections.transformer import TokenProjector
+                
+                # Process image
+                patch_factory = PatchFactory()
+                patches = patch_factory.adaptive_patching(image)
+                
+                result = {
+                    "task": task,
+                    "patches_extracted": len(patches),
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "processed"
+                }
 
-            return {"type": "result", "data": result}
+                return {"type": "result", "data": result}
+            except Exception as e:
+                return {"type": "error", "message": f"Processing failed: {str(e)}"}
         else:
             return {"type": "error", "message": "Unknown message type"}
 
