@@ -224,6 +224,7 @@ class SensorIngestor:
 class CameraSource:
     def __init__(self, config: Dict):
         self.config = config
+        self.sensor_type = 'camera'  # Add sensor type identifier
         self.camera_id = config.get('camera_id', 0)
         self.resolution = config.get('resolution', (640, 480))
         self.fps = config.get('fps', 30)
@@ -245,10 +246,15 @@ class CameraSource:
         return None
 
 class LidarSource:
+    """
+    Example LiDAR sensor source - requires hardware-specific driver
+    This is a plugin example. For production, integrate with your LiDAR SDK.
+    """
     def __init__(self, config: Dict):
         self.config = config
-        # In production, this would connect to actual LiDAR
-        pass
+        self.sensor_type = 'lidar'
+        # TODO: Initialize actual LiDAR connection
+        # Example: self.lidar = YourLidarSDK.connect(config)
         
     def read(self) -> Optional[Dict]:
         # Simulate LiDAR data
@@ -263,10 +269,15 @@ class LidarSource:
         }
 
 class ThermalSource:
+    """
+    Example Thermal camera source - requires hardware-specific driver
+    This is a plugin example. For production, integrate with your thermal camera SDK.
+    """
     def __init__(self, config: Dict):
         self.config = config
-        # In production, this would connect to thermal camera
-        pass
+        self.sensor_type = 'thermal'
+        # TODO: Initialize actual thermal camera connection
+        # Example: self.thermal = YourThermalSDK.connect(config)
         
     def read(self) -> Optional[Dict]:
         # Simulate thermal data
@@ -280,10 +291,15 @@ class ThermalSource:
         }
 
 class IMUSource:
+    """
+    Example IMU sensor source - requires hardware-specific driver
+    This is a plugin example. For production, integrate with your IMU SDK.
+    """
     def __init__(self, config: Dict):
         self.config = config
-        # In production, this would connect to IMU
-        pass
+        self.sensor_type = 'imu'
+        # TODO: Initialize actual IMU connection
+        # Example: self.imu = YourIMUSDK.connect(config)
         
     def read(self) -> Optional[Dict]:
         # Simulate IMU data
